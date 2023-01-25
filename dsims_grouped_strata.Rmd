@@ -1,0 +1,320 @@
+---
+title: "Distance sampling simulations with grouped strata"
+description: |
+  Description and R code to produce simulations to demonstrate the case when you have multiple strata in the design which you wish to be grouped for the analysis. This situation arises when you need to stratify purely for design purposes. This example contains more advanced simulation options, it is assumed that readers have some familiarity with `dssd` and `dsims` already, our other vignettes provide a more introductory level to design and simulation.
+author:
+  - name: Laura Marshall 
+    url: http://distancesampling.org
+    affiliation: CREEM, Univ of St Andrews
+    affiliation_url: https://creem.st-andrews.ac.uk
+date: "`r Sys.Date()`"
+output: 
+  distill::distill_article:
+    toc: TRUE
+    toc_depth: 2
+    number_sections: true
+bibliography: refs.bib
+csl: apa.csl
+---
+
+```{r loadpack, warning=FALSE, message=FALSE}
+library(knitr)
+library(dsims)
+```
+
+```{r, echo=FALSE,}
+myecho <- TRUE
+myeval <- TRUE
+opts_chunk$set(
+  tidy=TRUE     # display NOT code as typed
+)
+```
+
+These example simulations demonstrate the option to group strata at the analysis stage during a simulation. There are different reasons why we may wish to divide our study region into strata, or perhaps strata into sub strata but sometimes we might need to create strata purely to optimise the design. For example, if we have a narrow study region that follows a coastline and we wish to keep our lines perpendicular to the coast then we may need to divide the region into strata and use different design angles in each stratum. Assuming we keep the coverage constant across these strata, the data can then be grouped at the analysis stage. We will illustrate an example of this scenario below.
+
+# Getting started
+
+Ensure you have administrator privileges on your computer and install the necessary R packages. 
+
+Currently `dssd` [@dssdpkg] and `dsims` [@dsimspkg] must be installed from our github repositories rather than CRAN. The code below first installs `devtools` [@devtoolspkg] from CRAN and then `dssd` and `dsims` from github.
+
+```{r packages_temp, echo=FALSE, eval=FALSE}
+# Package not currently on CRAN (alternative install below)
+needed.packages <- c("dsims")
+myrepo <- "http://cran.rstudio.com"
+install.packages(needed.packages, repos=myrepo)
+```
+
+```{r packages, echo=myecho, eval=FALSE}
+needed.packages <- c("devtools")
+myrepo <- "http://cran.rstudio.com"
+install.packages(needed.packages, repos=myrepo)
+
+library(devtools)
+install_github("DistanceDevelopment/dssd", build_vignettes = TRUE)
+install_github("DistanceDevelopment/dsims", build_vignettes = TRUE)
+
+# Both libraries will be loaded by just loading dsims
+library(dsims)
+```
+
+## Directory structure for files in this project
+
+In addition to the R packages, there are additional files required by this simulation. All necessary material are included in a Zip archive file entitled [results.zip](results.zip). Uncompressing the contents into a folder called results  within the same folder as the .Rmd file should give you the required structure to run the code in the .Rmd file. You should end up with the file *sim.results.ROBJ* within the results folder. 
+
+# Creating a grouped strata simulation
+
+## Creating a region object
+
+First, we create the region object using a shapefile stored within the package directory. The shapefile provided contains a marine study area off the coast of Ireland. This region has already been projected into metres and `dssd` will detect that from the shapefile .prj file. The study region has also been divided into six strata and we will provide names in the code below to identify them ("North", "NW", "West Upper", "West Lower", "SW", "South"). Care should be taken to check that the order of the strata is as expected by checking a plot of the study region.
+
+Please note, that while this study area has already been divided into numerous strata, this step would normally be carried out later at the design stage to allow optimisation of the design. For this example, let's imagine that in reality we are interested in estimates for only two distinct areas in this study region, these will consist of the three northern strata grouped together and the three southern strata grouped together. 
+
+
+```{r makereg, echo=myecho, eval=myeval}
+# Find the full file path to the shapefile on the users machine
+shapefile.path <- system.file("extdata", "AreaRProjStrata.shp", package = "dssd")
+
+# Create the region object
+region <- make.region(region.name = "study area",
+                      strata.name = c("North", "NW", "West Upper",
+                                      "West Lower", "SW", "South"),
+                      shape = shapefile.path)
+
+# Plot the survey region
+plot(region)
+
+```
+
+## Creating a design object
+
+As mentioned above, we have two sub regions of interest in this study area, for which we would like estimates of density / abundance (the northern three strata and the southern three strata). Let's start by constructing our design as though we had only divided our study region into two strata. We expect more animals in the southern strata so we will allocate more effort per unit area to this strata, i.e. higher coverage. 
+
+Let's assume that our effort calculations have suggested that we have sufficient resources to survey parallel lines with a spacing of 16,000m in the northern strata and a spacing of 8,000m in the southern strata. We then need to supply a single design angle for the northern strata and one for the southern strata, let's set these to be 135 and 70 degrees, respectively. We will also specify that we will be doing minus sampling and do not expect to observe animals beyond 1,500m.
+
+We will generate a set of transects from this design and assess them for desirable design qualities.
+
+```{r design_one, echo=myecho, eval=myeval}
+# Define a design based on only two strata
+design <- make.design(region = region,
+                      transect.type = "line",
+                      design = "systematic",
+                      spacing = c(rep(16000,3),rep(8000,3)),
+                      design.angle =  c(rep(135,3),rep(70,3)),
+                      edge.protocol = "minus",
+                      truncation = 1500)
+
+# Generate and plot a single set of transects
+survey <- generate.transects(design)
+plot(region, survey)
+```
+
+An optimal design will aim to both maximise the number of samplers (many short lines are better than fewer long lines) and place them parallel to any density gradients. In the case of a long thin study region such as this, we want to lay the transects across the short dimension of the region (i.e. perpendicular to the coast). It is also often the case that marine species are distributed in relation to the coast (usually having a particular depth preference) so again laying the transects perpendicular to the coast should align them parallel to any density gradient and thereby reduce variability in encounter rate between transects resulting in more precise estimates.
+
+We can see from this first design, given the complexity of the region, choosing a single design angle for the northern and southern groups of strata is not going to achieve this goal. This is particularly problematic in the southern strata where selecting a design angle to give lines perpendicular to the coast in one area gives lines that are parallel to the coast in another. It is at this point, that it becomes clear that dividing the region further will better optimise the design. We will now specify individual design angles for each of the six strata.
+
+```{r design_two, echo=myecho, eval=myeval}
+# Define the design
+design <- make.design(region = region,
+                      transect.type = "line",
+                      design = "systematic",
+                      spacing = c(rep(16000,3),rep(8000,3)),
+                      design.angle = c(160, 135, 80, 135, 50, 150),
+                      edge.protocol = "minus",
+                      truncation = 1500)
+
+
+# Create a single set of transects to check
+survey <- generate.transects(design)
+plot(region, survey, covered.area = TRUE)
+```
+
+We can see from the image above that further dividing the northern and southern regions of interest into substrata allows us to better orientate our lines to both maximise the number of samplers and place them perpendicular to the coast. 
+
+As this further stratification was purely for design purposes (so we could modify the design angle as we moved along the coast) we would still treat each of the three substrata as one when we come to analyse the data. However, it is important to note that we can only do this because we have kept a uniform coverage across the substrata. However, the above design would not allow us to simply group all 6 strata at the analysis stage. As the northern strata have lower coverage than the southern strata the data will be  more representative of the southern strata than the northern and we must therefore ensure that any differences in detectability are modelled.
+
+## Creating a density object
+
+For the purposes of this simulation we will create a fairly simple density surface. We can add a bit of detail to suggest that the animals are a coastal species and are somewhat more abundant in the southern strata. 
+
+In order to get an idea of where to place the hostpots we can first check the range of the coordinates on the projected scale. Note that the plot of the region gives the scale in lat and lon despite the region being projected. We can access this information by requesting the bounding box of the sf object stored within the `dssd` region.
+
+```{r range, echo=myecho, eval=FALSE}
+# Get the bounding box of the sf object within the region
+sf::st_bbox(region@region)
+```
+We can now create a density grid with a spacing of 2,500m in both dimensions and add two hotspots to simulate a potentially realistic distribution of animals which prefer to stick closely to the coast. 
+
+```{r density, echo=myecho, eval=myeval}
+# Make a density grid with values of 1 across the region
+my.density <- make.density(region = region, 
+                           x.space = 2500, 
+                           y.space = 2500, 
+                           constant = 1)
+
+# Add a hotspot at coordinates (0, 1900000)
+my.density <- add.hotspot(my.density, 
+                          centre = c(0, 1900000), 
+                          sigma = 70000, 
+                          amplitude = 10)
+
+# Add a hotspot at coordinates (80000, 210000)
+my.density <- add.hotspot(my.density, 
+                          centre = c(80000, 2100000), 
+                          sigma = 100000, 
+                          amplitude = 5)
+
+# Plot this example density surface
+plot(my.density, region)
+```
+
+
+### Population size
+
+We will define a basic population for this simulation resulting in 2500 individuals. As the make.population command requires us to specify how many individuals per stratum, we will have to calculate this using the density summary.
+
+```{r density_summary, echo=myecho, eval=myeval}
+# View the density summary
+summary(my.density)
+```
+We can see from the table that if we used the exact densities in the density grid we would generate a lot of animals (see ave.N column)! What we often do, as it is fairly difficult to define a density surface with exact density values, is to use this as a relative density surface. We can therefore decide how many animals to allocate to each stratum by scaling these values.  
+
+```{r Nperstratum, echo=myecho, eval=myeval}
+# Extract average N values
+ave.N.vals <- summary(my.density)@summary$ave.N
+# Scale average N vals to sum to 2500
+N.per.stratum <-  round(2500*ave.N.vals/sum(ave.N.vals))
+
+# View the allocation per stratum
+N.per.stratum
+# Check the total sums to 2500 (sometimes rounding may cause slight variation)
+sum(N.per.stratum)
+
+```
+At this point, we will also create an individual level covariate to indicate whether the animals are in the northern group of strata or the southern group of strata. We will do this to enable us to later model any differences in detectability between the northern and southern sub populations. Ignoring any differences would not only lead bias in our estimates of abundance for the northern and southern strata but in our total estimates also. 
+
+```{r covs, echo=myecho, eval=myeval}
+# Create the population description
+covs <- list()
+# Adds a strata group entry allocating "North" to all animals in the North, NW and West Upper strata and allocating "South" to all animals in the West Lower, SW and South strata.
+covs$strata.group <- data.frame(level = c(rep("North",3), rep("South",3)),
+                                prob = rep(1,6),
+                                strata = c('North', 'NW', 'West Upper', 'West Lower', 'SW', 'South'))
+```
+
+We will now include the above information in our population description and set the fixed population size argument to be true (this is in fact the default).
+
+```{r abund, echo=myecho, eval=myeval}
+# Create the population description
+pop.description <- make.population.description(region = region, 
+                                               density = my.density,
+                                               covariates = covs,
+                                               N = N.per.stratum, 
+                                               fixed.N = TRUE)
+```
+
+### True detection function
+
+We will simulate using a half-normal detection function but change $\sigma$ (scale.param) depending on stratum and use a truncation distance of 1500m. By changing the detection functions across strata we can demonstrate when pooling robustness applies and when it fails. Pooling robustness refers to a property in distance sampling which allows us to obtain unbiased abundance estimates from a single 'pooled' detection function fitted across a number of sub populations, even when detectability may vary greatly. Pooling robustness applies when our data are a representative sample across the population for which we are generating estimates. In this example, the data in our three northern sub-strata can be pooled and the data in our three southern sub- strata can be pooled. We cannot pool detections from any strata / sub-strata where coverage varies as the resulting detection function will be more representative of the strata with higher coverage. 
+
+```{r truedetect, echo=myecho, eval=myeval}
+# Create the detectability
+detect <- make.detectability(key.function = "hn", 
+                             scale.param = c(950,850,750,650,550,450), 
+                             truncation = 1500)
+
+# Plot the detectability
+plot(detect, pop.description)
+```
+
+
+## Creating the analyses object
+
+The simulation engine currently only fits one global detection function to each simulated dataset. In the scenario we have constructed, we know that pooling robustness does not apply across the study region as a whole as we have different levels of coverage between the northern ans southern strata. Given we cannot fit separate detection functions we must allow our model to be able to vary the detection function across the two groups of strata. To achieve this we can include the `strata.group` covariate (which we included in the population description) in the model, this will allow a different scale parameter to be estimated for the northern three strata than for the southern three.
+
+Note that we could have simply included `Region.Label` as a covariate in the detection function model, however, within the simulation at the stage of fitting the detection function all strata are included in the dataset and this would have resulted in a scale parameter being estimated for all 6 strata individually. 
+
+It is at the analysis stage that we also need to define how the strata will be grouped in order to obtain estimates for our regions of interest. The dataframe created in the code below tells the simulation how to group the strata.
+
+
+```{r group.strata, echo=myecho, eval=myeval}
+# Create a dataframe describing how the strata will be grouped
+group.strata <- data.frame(design.id = c('North', 'NW', 'West Upper', 'West Lower', 'SW', 'South'),
+                           analysis.id = c(rep("North",3), rep("South",3)))
+
+# View the dataframe
+group.strata
+```
+We will now define the analyses. It is advisable to incorporate some model uncertainty into the simulations so we will allow the simulation to select between a half normal and a hazard rate model both with strata group included as a covariate. We will use the AIC as the criteria for model selection.
+
+```{r candidate.detfns, echo=myecho, eval=myeval}
+# Define the analyses
+ds.analyses <- make.ds.analysis(dfmodel = list(~strata.group, ~strata.group),
+                                key = c("hn", "hr"),
+                                truncation = 1500,
+                                group.strata = group.strata,
+                                criteria = "AIC")
+```
+
+## Creating and running the simulation
+
+We now have all the components we need to group them together as a simulation. At this point we also select the number of repetitions which for this example we will set to 1000. Note that the first time you run a simulation you should limit the number of repetitions to only a few to check everything works as expected.
+
+```{r simobj, echo=myecho, eval=myeval}
+# Create the simulation
+simulation <- make.simulation(reps = 1000, 
+                              design = design,
+                              population.description = pop.description,
+                              detectability = detect,
+                              ds.analysis = ds.analyses)
+```
+
+A useful way to check the simulation setup is to generate a single example survey, this may take a moment to complete.
+
+```{r egsurvey, echo=myecho, eval=myeval, warning=FALSE}
+# Simulate the data generation for a single survey
+eg.survey <- run.survey(simulation)
+
+# Plot the example survey
+plot(eg.survey, region)
+```
+
+
+If the previous plots lead you to believe you have properly parameterised your simulation, it is time to run it. If you run it for a small number of repetitions it should only take a minute or two to complete, running for a 1000 repetitions will take considerably longer and so this simulation has already been run and the results can be loaded instead.
+
+```{r runsim, echo=myecho, eval=FALSE, warning=FALSE}
+# Run the simulation in parallel
+simulation  <- run.simulation(simulation, run.parallel = TRUE)
+
+# Save the simulation results
+save(simulation, file = "results/sim.results.ROBJ")
+```
+
+```{r loadsim, echo=myecho, eval=myeval}
+# Load the simulation object which has already been run
+load("results/sim.results.ROBJ")
+```
+
+After you have loaded the simulation which has already been run you can view the results. to view the full summary use `summary(simulation)`, below we will store the simulation summary and look at specific tables within it. Firstly, we will view the summary table. Notice that as requested we have results for only a northern and a southern strata instead of all six. The summary table indicates that around 98 detections were made on average in the northern strata and 275 in the southern strata. It is important to check that there are sufficient detections in each strata so that any differences in detectability can be accurately modelled in the detection function.
+
+```{r summary, echo=myecho, eval=myeval}
+# Create a summary (silently without the description)
+sim.summary <- summary(simulation, description.summary = FALSE)
+
+# Display the summary table
+sim.summary@individuals$summary
+```
+
+Next we will view the table giving the abundance estimates. There is a small amount of negative bias for both strata and in the total estimate of abundance. The bias does seem to be sufficient to reduce the coverage of the confidence intervals (which should be 0.95) to only 0.92 for the southern strata and the total estimate. Sometimes reduced confidence interval coverage can be due to the variance being under estimated but in this case it seems only related to the bias for the southern strata and only slightly amplified in the total. The mean.se (mean of the estimated standard error) and the sd.of.means (truth - observed standard error of the estimates) are very close for the southern strata and only indicate very slight under estimation for the total.
+
+```{r estimates, echo=myecho, eval=myeval}
+# Display the table of abundance estimates
+round(sim.summary@individuals$N,3)
+```
+
+## Discussion
+
+Even though the systematic parallel line design should give us largely uniform coverage across the region, because we are using minus sampling there is still the chance that edge effects could affect the estimates. This regions does have a long perimeter in comparison to the area contained within it. A coverage simulation will help to give an indication of how much reduced coverage there is around the boundary but to more accurately check whether the bias in the results and the reduced confidence interval coverage could be associate with edge effects we could repeat the survey with a uniform density surface. Edge effects will not cause bias when the density of animals around the edge of the region is the same as in the middle of the region. If the bias is due to edge effects then remember that the above case is likely not a worst case scenario and so it may be worth testing other plausible animal distributions to see if more severe bias is possible.
+
+
+The setup for the analysis in this simulation is a little complex due to the restrictions of the simulation package (i.e. needing to include the stratum covariate in the population description). When analysing your own distance sampling data from the field, if you have a similar scenario, you will be able to either fit separate detection functions to the data from the different regions of interest or create any kind of stratum variable you want, giving you more analysis options.  
